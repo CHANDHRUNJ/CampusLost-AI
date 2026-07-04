@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CampusLost AI — Smart Lost & Found</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+<!-- Using Gemini API directly via fetch, no local TF models loaded -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://leaflet.github.io/Leaflet.heat/dist/leaflet-heat.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#f1f5f9;color:#1e293b;font-family:'Inter',sans-serif;min-height:100vh}
+.tab-content{display:none}
+.tab-content.active{display:block;animation:fadeIn 0.3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+#auth-screen{position:fixed;inset:0;z-index:1000;background:linear-gradient(135deg,#1e293b 0%,#1e3a5f 100%);display:flex;align-items:center;justify-content:center;overflow-y:auto}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,0.6);z-index:500;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+#chat-window{position:fixed;bottom:80px;right:16px;width:320px;max-height:440px;z-index:400;display:none;flex-direction:column;background:white;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.2);border:1px solid #e2e8f0;overflow:hidden}
+#chat-fab{position:fixed;bottom:20px;right:20px;z-index:401;width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,#4f46e5,#0ea5e9);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 24px rgba(79,70,229,0.5);border:none;transition:transform 0.2s}
+#chat-fab:hover{transform:scale(1.08)}
+.chat-bubble-user{background:#4f46e5;color:white;border-radius:16px 16px 4px 16px;padding:8px 12px;font-size:13px;max-width:85%;align-self:flex-end;line-height:1.4}
+.chat-bubble-bot{background:#f8fafc;border:1px solid #e2e8f0;color:#1e293b;border-radius:16px 16px 16px 4px;padding:8px 12px;font-size:13px;max-width:85%;align-self:flex-start;line-height:1.4}
+#map{height:440px;border-radius:12px}
+.campus-marker{background:white;border:2px solid #6366f1;border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,0.2)}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:700}
+input,textarea{outline:none;transition:all 0.2s}
+input:focus,textarea:focus{ring:2}
+.card{background:white;border-radius:16px;box-shadow:0 1px 4px rgba(0,0,0,0.06),0 4px 16px rgba(0,0,0,0.04);border:1px solid #f1f5f9}
+.btn-primary{background:#4f46e5;color:white;border:none;border-radius:10px;font-weight:600;cursor:pointer;transition:all 0.2s}
+.btn-primary:hover{background:#4338ca;transform:translateY(-1px);box-shadow:0 4px 12px rgba(79,70,229,0.35)}
+.btn-secondary{background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:10px;font-weight:500;cursor:pointer;transition:all 0.2s}
+.btn-secondary:hover{background:#f1f5f9;border-color:#cbd5e1}
+.status-active{background:#dbeafe;color:#1d4ed8}
+.status-claimed{background:#fef3c7;color:#92400e}
+.status-returned{background:#dcfce7;color:#166534}
+@keyframes pulse-rec{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.7;transform:scale(1.05)}}
+.recording-pulse{animation:pulse-rec 1s infinite;background:#ef4444}
+</style>
+</head>
+<body>
+
+<!-- AUTH SCREEN -->
+<div id="auth-screen">
+<div class="w-full max-w-md px-4 py-8">
+  <div class="text-center mb-8">
+    <div class="inline-flex items-center justify-center w-16 h-16 bg-white/10 rounded-2xl mb-4">
+      <i data-lucide="scan-search" class="w-8 h-8 text-sky-400"></i>
+    </div>
+    <h1 class="text-3xl font-extrabold text-white mb-1">CampusLost AI</h1>
+    <p class="text-blue-200 text-sm">Smart Lost & Found for your Campus</p>
+  </div>
+  <div class="flex gap-2 p-1 bg-white/10 rounded-xl mb-5">
+    <button onclick="showAuthTab('login')" id="btn-login" class="flex-1 py-2 rounded-lg bg-white text-indigo-700 font-bold text-sm transition">Sign In</button>
+    <button onclick="showAuthTab('signup')" id="btn-signup" class="flex-1 py-2 rounded-lg text-white/70 font-bold text-sm hover:text-white transition">Create Account</button>
+  </div>
+  <div id="auth-login" class="bg-white rounded-2xl p-7 space-y-4 shadow-2xl">
+    <div><label class="text-sm font-medium text-gray-600 block mb-1.5">Email</label>
+    <input id="login-email" type="email" placeholder="you@campus.edu" class="w-full border border-gray-200 rounded-lg px-4 py-3 text-gray-900 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"></div>
+    <div><label class="text-sm font-medium text-gray-600 block mb-1.5">Password</label>
+    <input id="login-pass" type="password" placeholder="••••••••" class="w-full border border-gray-200 rounded-lg px-4 py-3 text-gray-900 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"></div>
+    <p id="login-error" class="text-red-600 text-xs hidden bg-red-50 border border-red-200 p-2 rounded-lg"></p>
+    <button onclick="doLogin()" id="login-btn" class="btn-primary w-full py-3 text-sm">Sign In →</button>
+    <p class="text-center text-xs text-gray-400">No account? <button onclick="showAuthTab('signup')" class="text-indigo-600 font-semibold hover:underline">Create one free</button></p>
+  </div>
+  <div id="auth-signup" class="bg-white rounded-2xl p-7 space-y-4 shadow-2xl hidden">
+    <div><label class="text-sm font-medium text-gray-600 block mb-1.5">Full Name</label>
+    <input id="signup-name" type="text" placeholder="John Smith" class="w-full border border-gray-200 rounded-lg px-4 py-3 text-gray-900 text-sm focus:border-indigo-500"></div>
+    <div><label class="text-sm font-medium text-gray-600 block mb-1.5">Email</label>
+    <input id="signup-email" type="email" placeholder="you@campus.edu" class="w-full border border-gray-200 rounded-lg px-4 py-3 text-gray-900 text-sm focus:border-indigo-500"></div>
+    <div><label class="text-sm font-medium text-gray-600 block mb-1.5">Password</label>
+    <input id="signup-pass" type="password" placeholder="Min 6 characters" class="w-full border border-gray-200 rounded-lg px-4 py-3 text-gray-900 text-sm focus:border-indigo-500"></div>
+    <p id="signup-error" class="text-red-600 text-xs hidden bg-red-50 border border-red-200 p-2 rounded-lg"></p>
+    <button onclick="doSignup()" id="signup-btn" class="btn-primary w-full py-3 text-sm">Create Account →</button>
+    <p class="text-center text-xs text-gray-400">Have an account? <button onclick="showAuthTab('login')" class="text-indigo-600 font-semibold hover:underline">Sign in</button></p>
+  </div>
+</div>
+</div>
+
+<!-- CLAIM MODAL -->
+<div id="claim-modal" class="modal-overlay hidden">
+<div class="bg-white rounded-2xl p-7 max-w-md w-full mx-4 shadow-2xl space-y-4">
+  <div class="flex items-center gap-3 mb-2">
+    <div class="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center"><i data-lucide="handshake" class="text-green-600 w-5 h-5"></i></div>
+    <div><h3 class="text-lg font-bold text-gray-900">Claim This Item</h3><p class="text-xs text-gray-400">Confirm this item belongs to you</p></div>
+  </div>
+  <div id="claim-item-info" class="bg-gray-50 border border-gray-200 p-4 rounded-xl text-sm text-gray-700"></div>
+  <div class="bg-blue-50 border border-blue-200 p-3 rounded-xl text-xs text-blue-700">📞 Your contact details will be securely shared with the finder so they can arrange the handover.</div>
+  <div><label class="text-sm font-medium text-gray-600 block mb-1.5">Your Mobile Number</label>
+  <input id="claim-contact" type="tel" placeholder="+91 98765 43210" class="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-900 focus:border-green-500"></div>
+  <div><label class="text-sm font-medium text-gray-600 block mb-1.5">How do you know it's yours?</label>
+  <textarea id="claim-reason" rows="2" placeholder="Describe a unique feature, mark, or detail only you'd know..." class="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-900 focus:border-green-500 resize-none"></textarea></div>
+  <div class="flex gap-3">
+    <button onclick="closeClaim()" class="btn-secondary flex-1 py-2.5 text-sm">Cancel</button>
+    <button onclick="submitClaim()" id="claim-submit-btn" class="flex-1 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-bold transition">✅ Submit Claim</button>
+  </div>
+</div>
+</div>
+
+<!-- VOICE INDICATOR -->
+<div id="voice-indicator" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 hidden">
+  <div class="recording-pulse flex items-center gap-3 px-5 py-3 rounded-full text-white shadow-2xl text-sm font-bold">
+    <span class="w-3 h-3 bg-white rounded-full animate-ping"></span>
+    🎤 Recording... Speak now!
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="main-app" class="hidden flex-col min-h-screen">
+<!-- Navbar -->
+<nav class="bg-white border-b border-gray-200 sticky top-0 z-50 px-4 md:px-8 py-3 flex justify-between items-center shadow-sm">
+  <div class="flex items-center gap-2.5 font-bold text-lg text-gray-900">
+    <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center"><i data-lucide="scan-search" class="w-4 h-4 text-white"></i></div>
+    <span>CampusLost <span class="text-indigo-600">AI</span></span>
+  </div>
+  <div class="hidden md:flex gap-1 text-sm">
+    <button onclick="switchTab('dashboard')" class="px-4 py-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg font-medium transition">Feed</button>
+    <button onclick="switchTab('report')" class="px-4 py-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg font-medium transition">Report</button>
+    <button onclick="switchTab('matches')" class="px-4 py-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg font-medium transition">AI Matches</button>
+    <button onclick="switchTab('heatmap')" class="px-4 py-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg font-medium transition">Heatmap</button>
+    <button onclick="switchTab('rewards')" class="px-4 py-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg font-medium transition">Rewards</button>
+    <button onclick="switchTab('profile')" class="px-4 py-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg font-medium transition">Profile</button>
+  </div>
+  <div class="flex items-center gap-3">
+    <span id="user-points-nav" class="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-full hidden md:block"></span>
+    <div id="user-avatar" class="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm cursor-pointer" onclick="switchTab('profile')">?</div>
+    <button onclick="doLogout()" class="text-gray-400 hover:text-red-500 transition"><i data-lucide="log-out" class="w-4 h-4"></i></button>
+  </div>
+</nav>
+
+<main class="flex-grow max-w-7xl mx-auto w-full px-4 py-6">
+
+<!-- DASHBOARD -->
+<div id="dashboard" class="tab-content active">
+  <div class="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-3">
+    <div>
+      <h1 class="text-2xl font-extrabold text-gray-900">Live Campus Feed</h1>
+      <p class="text-gray-500 text-sm" id="welcome-msg">Welcome back!</p>
+    </div>
+    <div class="flex gap-2 flex-wrap">
+      <button onclick="fetchItems('all')" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition">All</button>
+      <button onclick="fetchItems('lost')" class="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg text-sm font-medium transition">🔴 Lost</button>
+      <button onclick="fetchItems('found')" class="px-4 py-2 bg-green-50 hover:bg-green-100 text-green-600 border border-green-200 rounded-lg text-sm font-medium transition">🟢 Found</button>
+      <button onclick="fetchItems('all')" class="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm transition"><i data-lucide="refresh-cw" class="w-4 h-4 text-gray-600"></i></button>
+    </div>
+  </div>
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="card p-5 text-center"><div class="text-2xl font-black text-red-500" id="stat-lost">-</div><div class="text-xs text-gray-500 mt-1 font-medium">Lost Items</div></div>
+    <div class="card p-5 text-center"><div class="text-2xl font-black text-green-600" id="stat-found">-</div><div class="text-xs text-gray-500 mt-1 font-medium">Found Items</div></div>
+    <div class="card p-5 text-center"><div class="text-2xl font-black text-indigo-600" id="stat-returned">-</div><div class="text-xs text-gray-500 mt-1 font-medium">Returned</div></div>
+  </div>
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="live-items-grid">
+    <div class="col-span-full text-center py-16 text-gray-400">
+      <i data-lucide="loader" class="w-8 h-8 animate-spin mx-auto mb-2 text-indigo-400"></i>Loading items...
+    </div>
+  </div>
+</div>
+
+<!-- REPORT -->
+<div id="report" class="tab-content">
+<div class="max-w-2xl mx-auto">
+  <div class="mb-6">
+    <h1 class="text-2xl font-extrabold text-gray-900">Report an Item</h1>
+    <p class="text-gray-500 text-sm mt-1">Fill the form below. AI will auto-detect from your photo.</p>
+  </div>
+  <div class="card p-7">
+    <form id="report-form" class="space-y-5">
+      <div class="flex gap-2 p-1 bg-gray-100 rounded-xl">
+        <label class="flex-1 cursor-pointer"><input type="radio" name="itemType" value="lostItems" class="peer hidden" checked>
+          <div class="py-2.5 text-center rounded-lg peer-checked:bg-red-500 peer-checked:text-white peer-checked:font-bold text-gray-500 transition text-sm">🔴 I Lost Something</div></label>
+        <label class="flex-1 cursor-pointer"><input type="radio" name="itemType" value="foundItems" class="peer hidden">
+          <div class="py-2.5 text-center rounded-lg peer-checked:bg-green-600 peer-checked:text-white peer-checked:font-bold text-gray-500 transition text-sm">🟢 I Found Something</div></label>
+      </div>
+
+      <!-- Upload + AI Detection -->
+      <div>
+        <label class="text-sm font-medium text-gray-700 block mb-2">Item Photo <span class="text-indigo-500 font-normal">(AI auto-detects!)</span></label>
+        <div class="border-2 border-dashed border-gray-300 hover:border-indigo-400 rounded-xl transition cursor-pointer relative" id="upload-container" style="min-height:130px">
+          <input type="file" id="imageInput" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onchange="handleImageSelect(event)">
+          <div id="upload-prompt" class="flex flex-col items-center justify-center py-8 px-4">
+            <i data-lucide="image-plus" class="w-10 h-10 text-gray-300 mb-2"></i>
+            <p class="text-sm text-gray-500 font-medium">Click or drag image here</p>
+            <p class="text-xs text-indigo-500 mt-1">🤖 Gemini AI will identify the item automatically</p>
+          </div>
+          <!-- AI Loading Overlay -->
+          <div id="ai-loading-overlay" class="hidden absolute inset-0 bg-white/90 rounded-xl flex flex-col items-center justify-center z-20 gap-3">
+            <div class="flex gap-1">
+              <span class="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style="animation-delay:0ms"></span>
+              <span class="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style="animation-delay:150ms"></span>
+              <span class="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style="animation-delay:300ms"></span>
+            </div>
+            <p class="text-sm font-semibold text-indigo-700">🤖 AI is identifying your item...</p>
+            <p class="text-xs text-gray-400">This takes a few seconds. Please wait.</p>
+          </div>
+          <img id="imagePreview" class="hidden w-full rounded-xl object-contain" style="max-height:200px">
+        </div>
+        <p id="ai-status" class="mt-2 text-xs font-medium text-green-600 hidden"></p>
+        <p id="ai-error-message" class="mt-2 text-xs text-red-500 hidden"></p>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div><label class="text-sm font-medium text-gray-700 block mb-1.5">Item Title</label>
+          <input type="text" id="title" class="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-gray-900 text-sm focus:border-indigo-500" required placeholder="e.g. Black Laptop"></div>
+        <div><label class="text-sm font-medium text-gray-700 block mb-1.5">Category</label>
+          <select id="category" class="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-gray-900 text-sm focus:border-indigo-500 bg-white">
+            <option value="">Select category</option>
+            <option>Electronics</option><option>Bags & Wallets</option><option>Water Bottles</option>
+            <option>Stationery</option><option>Clothing & Accessories</option><option>Keys</option>
+            <option>ID & Cards</option><option>Other</option>
+          </select></div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1.5">Location</label>
+          <div class="flex gap-2">
+            <input type="text" id="location" class="flex-1 border border-gray-200 rounded-lg px-3 py-2.5 text-gray-900 text-sm focus:border-indigo-500" required placeholder="e.g. Library">
+            <button type="button" onclick="startVoice('location')" title="Voice input" id="voice-loc-btn" class="w-10 h-10 border border-gray-200 hover:border-indigo-400 hover:bg-indigo-50 rounded-lg flex items-center justify-center transition flex-shrink-0">
+              <i data-lucide="mic" class="w-4 h-4 text-gray-500"></i></button>
+          </div>
+        </div>
+        <div><label class="text-sm font-medium text-gray-700 block mb-1.5">Date</label>
+          <input type="date" id="itemDate" class="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-gray-500 text-sm focus:border-indigo-500" style="color-scheme:light"></div>
+      </div>
+      <div>
+        <div class="flex justify-between items-center mb-1.5">
+          <label class="text-sm font-medium text-gray-700">Description</label>
+          <button type="button" onclick="startVoice('description')" id="voice-desc-btn" class="flex items-center gap-1 text-xs text-indigo-600 hover:underline font-medium">
+            <i data-lucide="mic" class="w-3 h-3"></i> Speak description
+          </button>
+        </div>
+        <textarea id="description" rows="2" class="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-gray-900 text-sm focus:border-indigo-500 resize-none" placeholder="Color, brand, any unique marks..."></textarea>
+      </div>
+      <input type="hidden" id="imageUrl" value="">
+      <button type="submit" id="submit-btn" class="btn-primary w-full py-3 text-sm">Submit Report &amp; Earn Points 🎉</button>
+    </form>
+  </div>
+</div>
+</div>
+
+<!-- MATCHES -->
+<div id="matches" class="tab-content">
+  <div class="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-3">
+    <div><h1 class="text-2xl font-extrabold text-gray-900">AI Matchmaking</h1>
+    <p class="text-gray-500 text-sm">Smart algorithm pairs lost & found items.</p></div>
+    <button onclick="runMatchmaking()" class="btn-primary px-5 py-2.5 text-sm flex items-center gap-2 w-fit">
+      <i data-lucide="cpu" class="w-4 h-4"></i> Run AI Analysis
+    </button>
+  </div>
+  <div class="space-y-4" id="matches-grid">
+    <div class="card p-12 text-center">
+      <i data-lucide="brain-circuit" class="w-12 h-12 mx-auto mb-4 text-gray-300"></i>
+      <p class="text-gray-400 font-medium">Click "Run AI Analysis" to find potential matches.</p>
+    </div>
+  </div>
+</div>
+
+<!-- HEATMAP -->
+<div id="heatmap" class="tab-content">
+  <div class="mb-6">
+    <h1 class="text-2xl font-extrabold text-gray-900">Campus Heatmap</h1>
+    <p class="text-gray-500 text-sm mt-1">Visual hotspot of lost & found activity across campus.</p>
+  </div>
+  <div class="flex gap-2 mb-4 flex-wrap">
+    <button onclick="renderHeatmap('all')" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold">All Items</button>
+    <button onclick="renderHeatmap('lost')" class="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-semibold">Lost Only</button>
+    <button onclick="renderHeatmap('found')" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold">Found Only</button>
+  </div>
+  <div class="card p-2 mb-5 overflow-hidden"><div id="map"></div></div>
+  <div class="card p-6">
+    <h3 class="font-bold text-gray-800 mb-4 flex items-center gap-2"><i data-lucide="bar-chart-3" class="text-indigo-500 w-5 h-5"></i> Location Breakdown</h3>
+    <div id="location-table" class="space-y-3 text-sm"></div>
+  </div>
+</div>
+
+<!-- REWARDS -->
+<div id="rewards" class="tab-content">
+  <div class="mb-6"><h1 class="text-2xl font-extrabold text-gray-900">Rewards & Badges</h1>
+  <p class="text-gray-500 text-sm mt-1">Earn points for helping your campus community!</p></div>
+  <div class="max-w-2xl space-y-4">
+    <div class="card p-8 text-center bg-gradient-to-br from-indigo-50 to-purple-50 border-indigo-100">
+      <div class="text-5xl font-black text-indigo-600 mb-1" id="reward-points">-</div>
+      <div class="text-gray-500 text-sm font-medium">Your Campus Points</div>
+      <div class="mt-4 flex flex-wrap gap-2 justify-center" id="reward-badges"></div>
+    </div>
+    <div class="card p-6">
+      <h3 class="font-bold text-gray-800 mb-4">How to Earn</h3>
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between p-3 bg-gray-50 rounded-xl"><span class="text-gray-700">📝 Report a lost item</span><span class="font-bold text-amber-600">+10 pts</span></div>
+        <div class="flex justify-between p-3 bg-gray-50 rounded-xl"><span class="text-gray-700">🔍 Report a found item</span><span class="font-bold text-amber-600">+20 pts</span></div>
+        <div class="flex justify-between p-3 bg-gray-50 rounded-xl"><span class="text-gray-700">✅ Item successfully returned</span><span class="font-bold text-amber-600">+50 pts</span></div>
+        <div class="flex justify-between p-3 bg-gray-50 rounded-xl"><span class="text-gray-700">🤝 Claim verified by finder</span><span class="font-bold text-amber-600">+15 pts</span></div>
+      </div>
+    </div>
+    <div class="card p-6">
+      <h3 class="font-bold text-gray-800 mb-4">Badge Guide</h3>
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div class="bg-gray-50 p-3 rounded-xl flex items-center gap-3"><span class="text-2xl">🌱</span><div><div class="font-semibold">Rookie</div><div class="text-xs text-gray-400">First report</div></div></div>
+        <div class="bg-gray-50 p-3 rounded-xl flex items-center gap-3"><span class="text-2xl">🔍</span><div><div class="font-semibold">Finder</div><div class="text-xs text-gray-400">1 found report</div></div></div>
+        <div class="bg-gray-50 p-3 rounded-xl flex items-center gap-3"><span class="text-2xl">🏆</span><div><div class="font-semibold">Hero</div><div class="text-xs text-gray-400">Returned an item</div></div></div>
+        <div class="bg-gray-50 p-3 rounded-xl flex items-center gap-3"><span class="text-2xl">💫</span><div><div class="font-semibold">Super Helper</div><div class="text-xs text-gray-400">5+ found reports</div></div></div>
+        <div class="bg-gray-50 p-3 rounded-xl flex items-center gap-3"><span class="text-2xl">👑</span><div><div class="font-semibold">Guardian</div><div class="text-xs text-gray-400">10+ total reports</div></div></div>
+        <div class="bg-gray-50 p-3 rounded-xl flex items-center gap-3"><span class="text-2xl">⭐</span><div><div class="font-semibold">Star</div><div class="text-xs text-gray-400">100+ points</div></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PROFILE -->
+<div id="profile" class="tab-content">
+<div class="max-w-lg">
+  <div class="mb-6"><h1 class="text-2xl font-extrabold text-gray-900">My Profile</h1></div>
+  <div class="card p-7 mb-4">
+    <div class="flex items-center gap-4 mb-6">
+      <div id="profile-avatar" class="w-16 h-16 rounded-2xl bg-indigo-600 text-white flex items-center justify-center text-2xl font-bold">?</div>
+      <div><h2 id="profile-name" class="text-xl font-bold text-gray-900">Loading...</h2>
+      <p id="profile-email" class="text-gray-500 text-sm"></p>
+      <div class="mt-1 flex flex-wrap gap-1" id="profile-badges"></div></div>
+    </div>
+    <div class="grid grid-cols-3 gap-3 text-center">
+      <div class="bg-red-50 p-3 rounded-xl"><div class="text-xl font-black text-red-500" id="my-lost-count">-</div><div class="text-xs text-gray-500 mt-0.5">Lost Reports</div></div>
+      <div class="bg-green-50 p-3 rounded-xl"><div class="text-xl font-black text-green-600" id="my-found-count">-</div><div class="text-xs text-gray-500 mt-0.5">Found Reports</div></div>
+      <div class="bg-amber-50 p-3 rounded-xl"><div class="text-xl font-black text-amber-600" id="my-points">-</div><div class="text-xs text-gray-500 mt-0.5">Points</div></div>
+    </div>
+  </div>
+  <div class="card p-5 mb-4 flex items-center justify-between">
+    <div><p class="text-sm font-semibold text-gray-700">Member Since</p><p class="text-xs text-gray-400" id="member-since">-</p></div>
+    <i data-lucide="calendar" class="text-indigo-400 w-5 h-5"></i>
+  </div>
+  <button onclick="doLogout()" class="w-full py-3 bg-red-50 border border-red-200 text-red-500 hover:bg-red-100 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition">
+    <i data-lucide="log-out" class="w-4 h-4"></i> Sign Out
+  </button>
+</div>
+</div>
+
+</main>
+</div>
+
+<!-- AI CHAT -->
+<button id="chat-fab" onclick="toggleChat()">
+  <i data-lucide="message-circle" class="w-6 h-6 text-white"></i>
+</button>
+<div id="chat-window">
+  <div style="background:linear-gradient(135deg,#4f46e5,#0ea5e9)" class="px-4 py-3 flex justify-between items-center">
+    <div class="flex items-center gap-2 font-semibold text-sm text-white">
+      <div class="w-7 h-7 bg-white/20 rounded-full flex items-center justify-center"><i data-lucide="bot" class="w-4 h-4 text-white"></i></div>
+      CampusLost AI Assistant
+    </div>
+    <button onclick="toggleChat()" class="text-white/70 hover:text-white text-lg leading-none">✕</button>
+  </div>
+  <div id="chat-messages" class="flex flex-col gap-2 p-3 overflow-y-auto bg-gray-50" style="max-height:260px"></div>
+  <div class="flex gap-2 p-3 bg-white border-t border-gray-100">
+    <input id="chat-input" type="text" placeholder="Ask about a lost item..." class="flex-1 bg-gray-100 rounded-lg px-3 py-2 text-sm text-gray-900 border border-gray-200 focus:border-indigo-400 focus:outline-none" onkeydown="if(event.key==='Enter')sendChat()">
+    <button onclick="sendChat()" class="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold transition">↑</button>
+  </div>
+</div>
+
+<script type="module">
+import{initializeApp}from"https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import{getFirestore,collection,addDoc,getDocs,doc,setDoc,updateDoc,getDoc}from"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import{getAuth,createUserWithEmailAndPassword,signInWithEmailAndPassword,onAuthStateChanged,signOut,updateProfile}from"https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+const fbapp=initializeApp({apiKey:"AIzaSyAMO55nQnxS_D_bwjnD6OROW6bFTveCabs",authDomain:"campuslostai.firebaseapp.com",projectId:"campuslostai",storageBucket:"campuslostai.firebasestorage.app",messagingSenderId:"811730283494",appId:"1:811730283494:web:df88eabceefa9d399a0427"});
+const db=getFirestore(fbapp),auth=getAuth(fbapp);
+const CLOUD="qvrko8f8",CAPIKEY="153465444494312",CSECRET="5daC_b0Abwe3jzmly_hPG6flwlY";
+let cu=null,mapI=null,heatL=null,claimItemId=null,claimItemType=null;
+
+const CAMPUS=[
+  {name:"📚 Library",lat:13.0098,lng:80.2360,key:"library"},
+  {name:"🍽️ Canteen",lat:13.0103,lng:80.2355,key:"canteen"},
+  {name:"🎭 Auditorium",lat:13.0105,lng:80.2345,key:"auditorium"},
+  {name:"🏫 Block A",lat:13.0100,lng:80.2340,key:"block a"},
+  {name:"🏫 Block B",lat:13.0095,lng:80.2352,key:"block b"},
+  {name:"🏫 Block C",lat:13.0108,lng:80.2362,key:"block c"},
+  {name:"🚻 Restroom",lat:13.0102,lng:80.2348,key:"restroom"},
+  {name:"🏋️ Gym",lat:13.0110,lng:80.2355,key:"gym"},
+  {name:"🏛️ Admin",lat:13.0100,lng:80.2365,key:"admin"},
+  {name:"🅿️ Parking",lat:13.0092,lng:80.2345,key:"parking"},
+  {name:"🏟️ Ground",lat:13.0112,lng:80.2370,key:"ground"},
+  {name:"🏠 Hostel",lat:13.0088,lng:80.2360,key:"hostel"},
+  {name:"🚪 Main Gate",lat:13.0082,lng:80.2350,key:"gate"},
+  {name:"🏥 Medical",lat:13.0104,lng:80.2372,key:"medical"},
+];
+function getCoords(l){if(!l)return[13.010+(Math.random()-.5)*.002,80.236+(Math.random()-.5)*.002,.4];const s=l.toLowerCase();for(const c of CAMPUS){if(s.includes(c.key))return[c.lat+(Math.random()-.5)*.0003,c.lng+(Math.random()-.5)*.0003,.9];}return[13.010+(Math.random()-.5)*.002,80.236+(Math.random()-.5)*.002,.4];}
+
+// AUTH
+onAuthStateChanged(auth,async u=>{
+  if(u){
+    cu=u;
+    document.getElementById('auth-screen').style.display='none';
+    const ma=document.getElementById('main-app');ma.classList.remove('hidden');ma.classList.add('flex');
+    const ini=(u.displayName||u.email||'U')[0].toUpperCase();
+    document.getElementById('user-avatar').innerText=ini;
+    document.getElementById('profile-avatar').innerText=ini;
+    document.getElementById('profile-name').innerText=u.displayName||'Campus User';
+    document.getElementById('profile-email').innerText=u.email;
+    document.getElementById('welcome-msg').innerText=`Welcome back, ${u.displayName||u.email}!`;
+    document.getElementById('member-since').innerText=new Date(u.metadata.creationTime).toLocaleDateString('en-IN',{year:'numeric',month:'long',day:'numeric'});
+    lucide.createIcons();fetchItems('all');loadProfile();
+  }else{
+    cu=null;document.getElementById('auth-screen').style.display='flex';
+    document.getElementById('main-app').classList.add('hidden');lucide.createIcons();
+  }
+});
+
+window.showAuthTab=t=>{
+  document.getElementById('auth-login').classList.toggle('hidden',t!=='login');
+  document.getElementById('auth-signup').classList.toggle('hidden',t!=='signup');
+  document.getElementById('btn-login').className=`flex-1 py-2 rounded-lg text-sm font-bold transition ${t==='login'?'bg-white text-indigo-700':'text-white/70 hover:text-white'}`;
+  document.getElementById('btn-signup').className=`flex-1 py-2 rounded-lg text-sm font-bold transition ${t==='signup'?'bg-white text-indigo-700':'text-white/70 hover:text-white'}`;
+};
+
+window.doLogin=async()=>{
+  const e=document.getElementById('login-email').value,p=document.getElementById('login-pass').value;
+  const err=document.getElementById('login-error'),btn=document.getElementById('login-btn');
+  if(!e||!p){err.innerText='Please enter email and password.';err.classList.remove('hidden');return;}
+  btn.innerText='Signing in...';btn.disabled=true;err.classList.add('hidden');
+  try{await signInWithEmailAndPassword(auth,e,p);}
+  catch(ex){err.innerText=ex.message.replace('Firebase: ','').replace(/\(auth.*\)\.?/,'').trim();err.classList.remove('hidden');}
+  finally{btn.innerText='Sign In →';btn.disabled=false;}
+};
+
+window.doSignup=async()=>{
+  const n=document.getElementById('signup-name').value.trim(),e=document.getElementById('signup-email').value.trim(),p=document.getElementById('signup-pass').value;
+  const err=document.getElementById('signup-error'),btn=document.getElementById('signup-btn');
+  if(!n||!e||!p){err.innerText='Please fill all fields.';err.classList.remove('hidden');return;}
+  btn.innerText='Creating account...';btn.disabled=true;err.classList.add('hidden');
+  try{
+    const c=await createUserWithEmailAndPassword(auth,e,p);
+    await updateProfile(c.user,{displayName:n});
+    await setDoc(doc(db,"users",c.user.uid),{name:n,email:e,createdAt:Date.now(),uid:c.user.uid,points:0,foundCount:0,lostCount:0,returnedCount:0});
+  }catch(ex){err.innerText=ex.message.replace('Firebase: ','').replace(/\(auth.*\)\.?/,'').trim();err.classList.remove('hidden');}
+  finally{btn.innerText='Create Account →';btn.disabled=false;}
+};
+window.doLogout=async()=>await signOut(auth);
+
+window.switchTab=id=>{
+  document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  if(id==='dashboard')fetchItems('all');
+  if(id==='heatmap')setTimeout(()=>renderHeatmap('all'),300);
+  if(id==='profile'||id==='rewards')loadProfile();
+};
+
+async function sha1(m){const b=new TextEncoder().encode(m);const h=await crypto.subtle.digest('SHA-1',b);return Array.from(new Uint8Array(h)).map(x=>x.toString(16).padStart(2,'0')).join('');}
+
+// AI Image Detection
+window.handleImageSelect=async ev=>{
+  const file=ev.target.files[0];if(!file)return;
+  const pre=document.getElementById('imagePreview'),pr=document.getElementById('upload-prompt');
+  const overlay=document.getElementById('ai-loading-overlay');
+  const st=document.getElementById('ai-status'),er=document.getElementById('ai-error-message');
+
+  // Show preview immediately
+  pre.src=URL.createObjectURL(file);
+  pre.classList.remove('hidden');
+  pr.classList.add('hidden');
+  overlay.classList.remove('hidden');
+  overlay.classList.add('flex');
+  er.classList.add('hidden');
+  st.classList.add('hidden');
+  document.getElementById('title').value='';
+
+  // Run AI detection (with slight delay so image renders)
+  setTimeout(async()=>{
+    try{
+      // Using Gemini 1.5 Flash for HIGHEST accuracy!
+      const GEMINI_API_KEY = "AQ.Ab8RN6KY5a32eNSll459IHHJh7CnAiq3UakB5UuO_zXvLKawIw"; 
+      
+      if (GEMINI_API_KEY === "PASTE_YOUR_NEW_API_KEY_HERE") {
+          throw new Error("API Key Missing! Please paste your Gemini API key in the code (line 471) to use the best AI model.");
+      }
+
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const base64data = e.target.result.split(',')[1];
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: 'Analyze this image and return a JSON object with two fields: "title" (a short descriptive name of the lost/found item, e.g. "Apple AirPods", "Blue Backpack", max 3 words) and "category" (strictly choose one from: Electronics, Bags & Wallets, Water Bottles, Stationery, Clothing & Accessories, Keys, ID & Cards, Other). Return ONLY valid JSON.' },
+                  { inline_data: { mime_type: file.type, data: base64data } }
+                ]
+              }]
+            })
+          });
+          const data = await response.json();
+          overlay.classList.add('hidden');overlay.classList.remove('flex');
+          
+          if(data.error) throw new Error(data.error.message);
+          
+          let text = data.candidates[0].content.parts[0].text;
+          text = text.replace(/```json/g, '').replace(/```/g, '').trim(); 
+          const result = JSON.parse(text);
+          
+          document.getElementById('title').value = result.title;
+          document.getElementById('category').value = result.category;
+          st.innerText = `✅ Gemini AI detected: "${result.title}"`;
+          st.classList.remove('hidden');
+        } catch (err) {
+          overlay.classList.add('hidden');overlay.classList.remove('flex');
+          er.innerText = err.message.includes('Quota') ? 'AI Quota Exceeded! You need a new API key.' : 'AI detection failed. Try again or type manually.';
+          er.classList.remove('hidden');
+        }
+      };
+      reader.readAsDataURL(file);
+    }catch(e){
+      overlay.classList.add('hidden');overlay.classList.remove('flex');
+      er.innerText=e.message;er.classList.remove('hidden');
+    }
+    // Cloudinary upload in background
+    try{
+      const ts=Math.floor(Date.now()/1000),sig=await sha1(`timestamp=${ts}${CSECRET}`);
+      const fd=new FormData();fd.append('file',file);fd.append('api_key',CAPIKEY);fd.append('timestamp',ts);fd.append('signature',sig);
+      const r=await fetch(`https://api.cloudinary.com/v1_1/${CLOUD}/image/upload`,{method:'POST',body:fd});
+      const d=await r.json();if(d.secure_url)document.getElementById('imageUrl').value=d.secure_url;
+    }catch(e){console.error('CDN',e);}
+  },200);
+};
+
+// Voice Input
+window.startVoice=targetId=>{
+  if(!('webkitSpeechRecognition'in window||'SpeechRecognition'in window)){alert('Voice input works in Chrome or Edge only!');return;}
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  const r=new SR();r.lang='en-IN';r.interimResults=false;
+  const ind=document.getElementById('voice-indicator');
+  ind.classList.remove('hidden');
+  r.onresult=e=>{document.getElementById(targetId).value=e.results[0][0].transcript;ind.classList.add('hidden');};
+  r.onend=()=>ind.classList.add('hidden');
+  r.onerror=()=>{ind.classList.add('hidden');alert('Could not hear you. Try again in a quiet area.');};
+  r.start();
+};
+
+// Fetch items with claim info
+window.fetchItems=async(filter='all')=>{
+  const grid=document.getElementById('live-items-grid');
+  grid.innerHTML='<div class="col-span-full flex flex-col items-center py-16 text-gray-400"><i data-lucide="loader" class="w-8 h-8 animate-spin mb-2 text-indigo-400"></i><span class="text-sm">Loading items...</span></div>';
+  lucide.createIcons();
+  try{
+    const[ls,fs,clSnap]=await Promise.all([getDocs(collection(db,"lostItems")),getDocs(collection(db,"foundItems")),getDocs(collection(db,"claims"))]);
+    // Build claims map: itemId -> claim data
+    const claimsMap={};
+    clSnap.forEach(d=>{const c=d.data();claimsMap[c.itemId]={...c,claimDocId:d.id};});
+
+    let items=[];
+    if(filter!=='found')ls.forEach(d=>items.push({id:d.id,type:'LOST',col:'red',coll:'lostItems',...d.data()}));
+    if(filter!=='lost')fs.forEach(d=>items.push({id:d.id,type:'FOUND',col:'green',coll:'foundItems',...d.data()}));
+    items.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+
+    document.getElementById('stat-lost').innerText=ls.size;
+    document.getElementById('stat-found').innerText=fs.size;
+    document.getElementById('stat-returned').innerText=items.filter(i=>i.status==='returned').length;
+
+    if(!items.length){grid.innerHTML='<div class="col-span-full text-center py-16 text-gray-400">No items yet. Be the first to report one!</div>';return;}
+
+    grid.innerHTML=items.map(item=>{
+      const isMine=cu&&item.userId===cu.uid;
+      const status=item.status||'active';
+      const claim=claimsMap[item.id];
+      let statusBadge='';
+      if(status==='returned')statusBadge='<span class="badge status-returned text-xs">✅ Returned</span>';
+      else if(status==='claimed')statusBadge='<span class="badge status-claimed text-xs">🤝 Claimed</span>';
+      else statusBadge='<span class="badge status-active text-xs">🔵 Active</span>';
+
+      // Claim button: Only show on FOUND items, only for non-reporters, only if still active
+      const showClaimBtn = item.type==='FOUND' && !isMine && status==='active';
+
+      // Finder sees claimant info when their FOUND item is claimed
+      let claimInfo='';
+      if(isMine && item.type==='FOUND' && status==='claimed' && claim){
+        claimInfo=`
+        <div class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs">
+          <p class="font-bold text-amber-800 mb-2">🔔 Someone claims this is theirs!</p>
+          <p class="text-gray-700"><b>Name:</b> ${claim.claimantName||'Unknown'}</p>
+          <p class="text-gray-700"><b>Email:</b> ${claim.claimantEmail||'-'}</p>
+          <p class="text-gray-700"><b>Phone:</b> ${claim.claimantContact||'-'}</p>
+          <p class="text-gray-700 mt-1"><b>Their reason:</b> "${claim.reason||'-'}"</p>
+          <div class="flex gap-2 mt-2">
+            <button onclick="markReturned('${item.id}','${item.coll}')" class="flex-1 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold transition">✅ Confirm Return</button>
+            <button onclick="rejectClaim('${item.id}','${item.coll}')" class="flex-1 py-1.5 bg-red-50 border border-red-200 text-red-500 hover:bg-red-100 rounded-lg text-xs font-bold transition">❌ Reject</button>
+          </div>
+        </div>`;
+      }
+
+      return `
+      <div class="card flex flex-col overflow-hidden hover:shadow-md transition-shadow duration-200">
+        ${item.imageUrl?`<img src="${item.imageUrl}" class="w-full h-44 object-cover">`:`<div class="w-full h-28 bg-gray-100 flex items-center justify-center"><i data-lucide="image-off" class="w-7 h-7 text-gray-300"></i></div>`}
+        <div class="p-4 flex flex-col gap-2 flex-grow">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold ${item.col==='red'?'text-red-500':'text-green-600'} uppercase tracking-wide">${item.type}</span>
+            ${statusBadge}
+          </div>
+          <h3 class="font-bold text-gray-900 text-base leading-tight">${item.title}</h3>
+          <span class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 font-medium rounded-full w-fit">${item.category||'Uncategorized'}</span>
+          <p class="text-xs text-gray-500 flex items-center gap-1"><i data-lucide="map-pin" class="w-3 h-3"></i>${item.location||'Unknown'}</p>
+          ${item.description?`<p class="text-xs text-gray-400 italic border-t border-gray-100 pt-2">"${item.description}"</p>`:''}
+          <div class="border-t border-gray-100 pt-2 mt-1">
+            <p class="text-xs text-gray-400">Reported by: <span class="font-medium text-gray-600">${item.userName||item.userEmail||'Anonymous'}</span></p>
+            ${isMine?'<span class="text-xs text-indigo-500 font-semibold">📌 Your Report</span>':''}
+          </div>
+          ${showClaimBtn?`<button onclick="openClaim('${item.id}','${item.coll}','${(item.title||'').replace(/'/g,"\\'")}','${(item.userName||'Someone').replace(/'/g,"\\'")}','${item.location||''}')" class="mt-1 w-full py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-xl transition">🙋 This is Mine! Claim It</button>`:''}
+          ${isMine&&item.type==='LOST'&&status==='active'?`<button onclick="markReturned('${item.id}','${item.coll}')" class="mt-1 w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition">✅ Mark as Found/Returned</button>`:''}
+          ${claimInfo}
+        </div>
+      </div>`;
+    }).join('');
+    lucide.createIcons();
+  }catch(e){grid.innerHTML=`<div class="col-span-full text-red-500 text-center py-10 text-sm">Firebase Error: ${e.message}<br><span class="text-xs text-gray-400">Make sure Firestore rules allow reads.</span></div>`;}
+};
+
+// Submit Report
+document.getElementById('report-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(!cu){alert('Please sign in!');return;}
+  const btn=document.getElementById('submit-btn');
+  btn.innerText='Saving...';btn.disabled=true;
+  const type=document.querySelector('input[name="itemType"]:checked').value;
+  const pts=type==='foundItems'?20:10;
+  try{
+    await addDoc(collection(db,type),{
+      title:document.getElementById('title').value,
+      category:document.getElementById('category').value,
+      location:document.getElementById('location').value,
+      description:document.getElementById('description').value,
+      date:document.getElementById('itemDate').value,
+      imageUrl:document.getElementById('imageUrl').value,
+      userId:cu.uid,userEmail:cu.email,userName:cu.displayName||cu.email,
+      status:'active',createdAt:Date.now()
+    });
+    await awardPoints(cu.uid,pts,type==='foundItems'?'found':'lost');
+    alert(`✅ Report submitted successfully! +${pts} points earned!`);
+    document.getElementById('report-form').reset();
+    document.getElementById('imagePreview').classList.add('hidden');
+    document.getElementById('upload-prompt').classList.remove('hidden');
+    document.getElementById('ai-status').classList.add('hidden');
+    document.getElementById('imageUrl').value='';
+    switchTab('dashboard');
+  }catch(err){alert('Error: '+err.message);}
+  finally{btn.innerText='Submit Report & Earn Points 🎉';btn.disabled=false;}
+});
+
+// Points
+async function awardPoints(uid,pts,type){
+  try{
+    const ref=doc(db,"users",uid),snap=await getDoc(ref);
+    const cur=snap.exists()?snap.data():{points:0,foundCount:0,lostCount:0};
+    const upd={points:(cur.points||0)+pts};
+    if(type==='found')upd.foundCount=(cur.foundCount||0)+1;
+    if(type==='lost')upd.lostCount=(cur.lostCount||0)+1;
+    await setDoc(ref,upd,{merge:true});
+  }catch(e){console.error(e);}
+}
+
+// Claim
+window.openClaim=(id,coll,title,reporter,loc)=>{
+  claimItemId=id;claimItemType=coll;
+  document.getElementById('claim-item-info').innerHTML=`<p class="font-semibold text-gray-900 mb-1">${title}</p><p class="text-gray-500 text-xs">📍 ${loc} &nbsp;•&nbsp; Reported by: <b>${reporter}</b></p>`;
+  document.getElementById('claim-modal').classList.remove('hidden');
+};
+window.closeClaim=()=>{document.getElementById('claim-modal').classList.add('hidden');claimItemId=null;};
+
+window.submitClaim=async()=>{
+  if(!cu||!claimItemId)return;
+  const contact=document.getElementById('claim-contact').value.trim();
+  const reason=document.getElementById('claim-reason').value.trim();
+  if(!contact||!reason){alert('Please fill in your mobile number and reason!');return;}
+  const btn=document.getElementById('claim-submit-btn');btn.innerText='Submitting...';btn.disabled=true;
+  try{
+    const iref=doc(db,claimItemType,claimItemId);
+    const isnap=await getDoc(iref);const idata=isnap.data();
+    await addDoc(collection(db,"claims"),{
+      itemId:claimItemId,itemType:claimItemType,itemTitle:idata.title,
+      claimantId:cu.uid,claimantName:cu.displayName||cu.email,claimantEmail:cu.email,claimantContact:contact,
+      reporterId:idata.userId,reporterEmail:idata.userEmail,reporterName:idata.userName,
+      reason,status:'pending',createdAt:Date.now()
+    });
+    await updateDoc(iref,{status:'claimed',claimedBy:cu.uid,claimedByName:cu.displayName||cu.email});
+    await awardPoints(cu.uid,15,'claim');
+    alert(`✅ Claim submitted!\n\nThe finder (${idata.userName||idata.userEmail}) will see your contact details and reach out to you at:\n📞 ${contact}\n\n+15 points awarded!`);
+    closeClaim();fetchItems('all');
+  }catch(e){alert('Error: '+e.message);}
+  finally{btn.innerText='✅ Submit Claim';btn.disabled=false;}
+};
+
+window.markReturned=async(id,coll)=>{
+  if(!confirm('Confirm this item has been successfully returned to its owner?'))return;
+  try{
+    await updateDoc(doc(db,coll,id),{status:'returned',returnedAt:Date.now()});
+    await awardPoints(cu.uid,50,'returned');
+    const ref=doc(db,"users",cu.uid);const snap=await getDoc(ref);
+    await setDoc(ref,{returnedCount:(snap.exists()?snap.data().returnedCount||0:0)+1},{merge:true});
+    alert('🎉 Marked as returned! +50 points! Thank you for helping!');
+    fetchItems('all');loadProfile();
+  }catch(e){alert('Error: '+e.message);}
+};
+
+window.rejectClaim=async(id,coll)=>{
+  if(!confirm('Reject this claim? The item will go back to Active status.'))return;
+  try{
+    await updateDoc(doc(db,coll,id),{status:'active',claimedBy:null});
+    alert('Claim rejected. Item is active again.');fetchItems('all');
+  }catch(e){alert('Error: '+e.message);}
+};
+
+// Profile
+async function loadProfile(){
+  if(!cu)return;
+  try{
+    const snap=await getDoc(doc(db,"users",cu.uid));
+    const d=snap.exists()?snap.data():{points:0,foundCount:0,lostCount:0};
+    const pts=d.points||0;
+    ['my-points','reward-points'].forEach(id=>document.getElementById(id).innerText=pts);
+    document.getElementById('my-lost-count').innerText=d.lostCount||0;
+    document.getElementById('my-found-count').innerText=d.foundCount||0;
+    document.getElementById('user-points-nav').innerText=`⭐ ${pts} pts`;
+    document.getElementById('user-points-nav').classList.remove('hidden');
+    const total=(d.lostCount||0)+(d.foundCount||0);
+    const badges=[];
+    if(total>=1)badges.push('🌱 Rookie');
+    if((d.foundCount||0)>=1)badges.push('🔍 Finder');
+    if(pts>=100)badges.push('⭐ Star');
+    if((d.foundCount||0)>=5)badges.push('💫 Super Helper');
+    if(total>=10)badges.push('👑 Guardian');
+    if((d.returnedCount||0)>=1)badges.push('🏆 Hero');
+    const bHtml=badges.map(b=>`<span class="badge bg-amber-100 text-amber-700 border border-amber-200 text-xs">${b}</span>`).join('');
+    ['reward-badges','profile-badges'].forEach(id=>document.getElementById(id).innerHTML=bHtml||'<span class="text-gray-400 text-xs">Report items to earn badges!</span>');
+  }catch(e){console.error(e);}
+}
+
+// Matchmaking
+function scoreMatch(a,b){
+  let s=0,r=[];
+  if(a.category&&b.category&&a.category.toLowerCase()===b.category.toLowerCase()){s+=40;r.push(`Category: ${a.category}`);}
+  const sw=new Set(['a','an','the','is','it','in','on','at','of','and','or','with','my','i']);
+  const aw=(a.title||'').toLowerCase().split(/\s+/).filter(w=>w.length>2&&!sw.has(w));
+  const bw=(b.title||'').toLowerCase().split(/\s+/).filter(w=>w.length>2&&!sw.has(w));
+  const cw=aw.filter(w=>bw.includes(w));
+  if(cw.length){s+=Math.min(40,cw.length*15);r.push(`Keywords: "${cw.join('","')}"`);}
+  if(a.location&&b.location){
+    if(a.location.toLowerCase()===b.location.toLowerCase()){s+=20;r.push('Same location');}
+    else{const al=a.location.toLowerCase().split(/\s+/),bl=b.location.toLowerCase().split(/\s+/);if(al.some(w=>w.length>2&&bl.includes(w))){s+=10;r.push('Nearby location');}}
+  }
+  return{score:Math.min(s,99),reason:r.join(' · ')||'Possible match.'};
+}
+
+window.runMatchmaking=async()=>{
+  const grid=document.getElementById('matches-grid');
+  grid.innerHTML='<div class="card p-12 text-center"><i data-lucide="loader" class="w-10 h-10 animate-spin mx-auto text-indigo-400 mb-3"></i><p class="text-gray-500 font-medium">Analyzing all items for matches...</p></div>';
+  lucide.createIcons();
+  try{
+    const[ls,fs]=await Promise.all([getDocs(collection(db,"lostItems")),getDocs(collection(db,"foundItems"))]);
+    let lost=[],found=[];
+    ls.forEach(d=>lost.push({id:d.id,...d.data()}));
+    fs.forEach(d=>found.push({id:d.id,...d.data()}));
+    if(!lost.length||!found.length){grid.innerHTML='<div class="card p-10 text-center text-gray-400">Need both Lost and Found items in the database!</div>';return;}
+    let all=[];
+    for(const l of lost)for(const f of found){const r=scoreMatch(l,f);if(r.score>0)all.push({lost:l,found:f,...r});}
+    all.sort((a,b)=>b.score-a.score);const top=all.slice(0,5);
+    if(!top.length){grid.innerHTML='<div class="card p-10 text-center text-gray-400">No strong matches found yet. Add more items!</div>';return;}
+    const col=s=>s>=70?'text-green-600 bg-green-50':s>=40?'text-amber-600 bg-amber-50':'text-red-500 bg-red-50';
+    grid.innerHTML=top.map(m=>`
+      <div class="card p-5 flex flex-col md:flex-row gap-4 items-stretch">
+        <div class="flex-1 bg-red-50 border border-red-200 p-4 rounded-xl relative">
+          <span class="absolute -top-3 left-3 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full font-bold">LOST</span>
+          ${m.lost.imageUrl?`<img src="${m.lost.imageUrl}" class="w-full h-24 object-cover rounded-lg mb-3 mt-1">`:''}
+          <h4 class="font-bold text-gray-900 mt-1">${m.lost.title}</h4>
+          <p class="text-xs text-indigo-600 font-medium">${m.lost.category||''}</p>
+          <p class="text-xs text-gray-500 mt-1">📍 ${m.lost.location||'N/A'}</p>
+          <p class="text-xs text-gray-400 mt-1">👤 ${m.lost.userName||m.lost.userEmail||'Unknown'}</p>
+        </div>
+        <div class="flex flex-col items-center justify-center min-w-[100px] gap-2 py-3">
+          <div class="text-2xl font-black px-3 py-1 rounded-xl ${col(m.score)}">${m.score}%</div>
+          <div class="text-xs text-gray-400 font-medium">MATCH</div>
+          <div class="bg-gray-100 p-2 rounded-lg text-xs text-gray-600 text-center leading-relaxed">${m.reason}</div>
+        </div>
+        <div class="flex-1 bg-green-50 border border-green-200 p-4 rounded-xl relative">
+          <span class="absolute -top-3 left-3 bg-green-600 text-white text-xs px-2 py-0.5 rounded-full font-bold">FOUND</span>
+          ${m.found.imageUrl?`<img src="${m.found.imageUrl}" class="w-full h-24 object-cover rounded-lg mb-3 mt-1">`:''}
+          <h4 class="font-bold text-gray-900 mt-1">${m.found.title}</h4>
+          <p class="text-xs text-indigo-600 font-medium">${m.found.category||''}</p>
+          <p class="text-xs text-gray-500 mt-1">📍 ${m.found.location||'N/A'}</p>
+          <p class="text-xs text-gray-400 mt-1">👤 ${m.found.userName||m.found.userEmail||'Unknown'}</p>
+          ${cu&&m.found.userId!==cu.uid&&(m.found.status||'active')==='active'?`<button onclick="openClaim('${m.found.id}','foundItems','${(m.found.title||'').replace(/'/g,"\\'")}','${(m.found.userName||'Finder').replace(/'/g,"\\'")}','${m.found.location||''}')" class="mt-2 w-full py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-xl transition">🙋 Claim this is Mine</button>`:''}
+        </div>
+      </div>`).join('');
+    lucide.createIcons();
+  }catch(e){grid.innerHTML=`<div class="text-red-500 text-center p-6">Error: ${e.message}</div>`;}
+};
+
+// Heatmap
+window.renderHeatmap=async(filter='all')=>{
+  if(!mapI){
+    mapI=L.map('map').setView([13.0100,80.2358],17);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{attribution:'© CartoDB',maxZoom:20}).addTo(mapI);
+    const bounds=[[13.0082,80.2335],[13.0082,80.2380],[13.0115,80.2380],[13.0115,80.2335]];
+    L.polygon(bounds,{color:'#4f46e5',weight:2,fillOpacity:0.05,dashArray:'6,6'}).addTo(mapI).bindPopup('🎓 Campus Boundary');
+    CAMPUS.forEach(c=>{
+      const icon=L.divIcon({className:'',html:`<div class="campus-marker">${c.name.split(' ')[0]}</div>`,iconSize:[34,34],iconAnchor:[17,17]});
+      L.marker([c.lat,c.lng],{icon}).addTo(mapI).bindPopup(`<b>${c.name}</b>`);
+    });
+  }
+  if(heatL){mapI.removeLayer(heatL);}
+  try{
+    const[ls,fs]=await Promise.all([getDocs(collection(db,"lostItems")),getDocs(collection(db,"foundItems"))]);
+    let pts=[],locCount={};
+    if(filter!=='found')ls.forEach(d=>{const dt=d.data();pts.push(getCoords(dt.location));locCount[dt.location||'Unknown']=(locCount[dt.location||'Unknown']||0)+1;});
+    if(filter!=='lost')fs.forEach(d=>{const dt=d.data();pts.push(getCoords(dt.location));locCount[dt.location||'Unknown']=(locCount[dt.location||'Unknown']||0)+1;});
+    CAMPUS.forEach(c=>{for(let i=0;i<2;i++)pts.push([c.lat+(Math.random()-.5)*.001,c.lng+(Math.random()-.5)*.001,.15]);});
+    heatL=L.heatLayer(pts,{radius:28,blur:22,gradient:{0.2:'#93c5fd',0.5:'#34d399',0.8:'#fbbf24',1:'#ef4444'}}).addTo(mapI);
+    const sorted=Object.entries(locCount).sort((a,b)=>b[1]-a[1]);
+    const max=sorted[0]?.[1]||1;
+    document.getElementById('location-table').innerHTML=sorted.length?sorted.map(([loc,cnt])=>`
+      <div class="flex items-center gap-3">
+        <div class="flex-1">
+          <div class="flex justify-between text-xs mb-1.5"><span class="text-gray-700 font-medium">${loc}</span><span class="text-indigo-600 font-bold">${cnt}</span></div>
+          <div class="w-full bg-gray-100 rounded-full h-2"><div class="h-2 rounded-full bg-gradient-to-r from-indigo-500 to-sky-400" style="width:${Math.round(cnt/max*100)}%"></div></div>
+        </div>
+      </div>`).join(''):'<p class="text-gray-400 text-sm">No data yet. Report items to populate the heatmap!</p>';
+  }catch(e){console.error(e);}
+};
+
+// Chat
+window.toggleChat=()=>{
+  const w=document.getElementById('chat-window');
+  const show=w.style.display!=='flex';w.style.display=show?'flex':'none';
+  if(show&&!w._greeted){
+    addBot("👋 Hi! I'm your CampusLost AI assistant.\n\nTry asking:\n• 'I lost my laptop'\n• 'Found items in library'\n• 'How many items are lost?'\n• 'Show electronics'");
+    w._greeted=true;
+  }
+};
+function addMsg(text,isUser){
+  const box=document.getElementById('chat-messages');
+  const div=document.createElement('div');div.className=isUser?'chat-bubble-user':'chat-bubble-bot';
+  div.style.whiteSpace='pre-wrap';div.innerText=text;box.appendChild(div);box.scrollTop=box.scrollHeight;
+}
+function addBot(t){addMsg(t,false);}
+
+window.sendChat=async()=>{
+  const inp=document.getElementById('chat-input');const msg=inp.value.trim();if(!msg)return;
+  addMsg(msg,true);inp.value='';
+  const thinking=document.createElement('div');thinking.className='chat-bubble-bot';thinking.innerText='🔍 Searching...';
+  document.getElementById('chat-messages').appendChild(thinking);
+  document.getElementById('chat-messages').scrollTop=document.getElementById('chat-messages').scrollHeight;
+  try{
+    const[ls,fs]=await Promise.all([getDocs(collection(db,"lostItems")),getDocs(collection(db,"foundItems"))]);
+    let lost=[],found=[];ls.forEach(d=>lost.push(d.data()));fs.forEach(d=>found.push(d.data()));
+    const ml=msg.toLowerCase();
+    if(ml.includes('how many')||ml.includes('total')||ml.includes('count')){
+      thinking.innerText=`📊 Database Stats:\n• ${lost.length} lost items reported\n• ${found.length} found items reported\n• ${lost.length+found.length} total reports`;return;
+    }
+    const keywords=ml.replace(/i (lost|found|need|want)|looking for|seen|my|a |an |the /gi,'').trim().split(/\s+/).filter(w=>w.length>2);
+    let results=[...lost.map(i=>({...i,_type:'LOST'})),...found.map(i=>({...i,_type:'FOUND'}))].filter(item=>
+      keywords.some(k=>(item.title||'').toLowerCase().includes(k)||(item.category||'').toLowerCase().includes(k)||(item.location||'').toLowerCase().includes(k))
+    );
+    if(results.length){
+      thinking.innerText=`✅ Found ${results.length} matching item(s):\n\n`+results.slice(0,4).map(r=>`[${r._type}] ${r.title}\n📍 ${r.location||'N/A'} | 👤 ${r.userName||'Unknown'}`).join('\n\n')+'\n\nCheck the Live Feed for more details!';
+    }else{
+      thinking.innerText=`😔 No items found matching "${keywords.join(' ')}".\n\nTips:\n• Check the Live Feed tab\n• Try different keywords\n• Post a report — someone may have found it!`;
+    }
+  }catch(e){thinking.innerText='Sorry, search failed. Please try again!';}
+};
+
+lucide.createIcons();
+</script>
+</body>
+</html>
